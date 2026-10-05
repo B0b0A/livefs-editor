@@ -718,15 +718,23 @@ echo 'LazyUnmount=yes' >> /run/systemd/system/usr-lib-modules.mount.d/lazy.conf
     # squashfs layers above base on top of it, and those upper layers can
     # carry their own baked-in /var/lib/apt/lists snapshot from ISO build
     # time, which would shadow the apt lists we just refreshed in base.
-    # Refresh here too so package candidates reflect the current archive
-    # state, otherwise apt can resolve a candidate version that has since
-    # been superseded and removed from the pool, causing a 404 when
-    # download_missing_pool_debs tries to fetch it.
+    # Propagate the already-fetched-and-verified lists from base into the
+    # new_kernel_layer overlay (its topmost/writable layer) so package
+    # candidates reflect the current archive state; otherwise apt can
+    # resolve a candidate version that has since been superseded and
+    # removed from the pool, causing a 404 when download_missing_pool_debs
+    # tries to fetch it. Re-running cache.update() here instead would
+    # re-trigger apt's GPG verification a second time in the same process,
+    # which has been observed to leave Release files marked untrusted.
+    base_lists_dir = os.path.join(base, 'var/lib/apt/lists')
+    new_lists_dir = new_kernel_layer.p('var/lib/apt/lists')
+    os.makedirs(new_lists_dir, exist_ok=True)
+    for fname in os.listdir(base_lists_dir):
+        src = os.path.join(base_lists_dir, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(new_lists_dir, fname))
+
     cache = cache_for_dir(ctxt, new_kernel_layer.p())
-    with ctxt.logged(
-            '** updating apt lists... **',
-            '** updating apt lists done **'):
-        cache.update(AcquireProgress())
     cache[meta_pkg].mark_install()
     debs = download_missing_pool_debs(ctxt, cache)
     add_debs_to_pool(ctxt, debs=debs)
